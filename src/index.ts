@@ -58,67 +58,25 @@ async function execute({
     projectRpcs.set(project, createMethodsRPC(project) as unknown as WorkerRPC);
   }
 
-  const singleThreads = specs.filter(
-    (spec) => spec.project.config.poolOptions?.threads?.singleThread
+  const filesByEnv = await groupFilesByEnv(specs);
+  const envs = envsOrder.concat(
+    Object.keys(filesByEnv).filter((env) => !envsOrder.includes(env))
   );
 
-  const multipleThreads = specs.filter(
-    (spec) => !spec.project.config.poolOptions?.threads?.singleThread
-  );
+  for (const env of envs) {
+    const files = filesByEnv[env];
 
-  if (singleThreads.length) {
-    const filesByEnv = await groupFilesByEnv(specs);
-    const envs = envsOrder.concat(
-      Object.keys(filesByEnv).filter((env) => !envsOrder.includes(env))
-    );
+    if (!files?.length) continue;
 
-    for (const env of envs) {
-      const files = filesByEnv[env];
-
-      if (!files?.length) continue;
-
-      await executeFiles({
-        name,
-        ctx,
-        project: files[0].project,
-        config: getConfig(files[0].project),
-        files: files.map((f) => f.file),
-        environment: files[0].environment,
-        invalidates,
-      });
-    }
-  }
-
-  if (multipleThreads.length) {
-    const filesByEnv = await groupFilesByEnv(multipleThreads);
-    const files = Object.values(filesByEnv).flat();
-    const results: PromiseSettledResult<void>[] = [];
-
-    results.push(
-      ...(await Promise.allSettled(
-        files.map((file) =>
-          executeFiles({
-            ctx,
-            name,
-            project: file.project,
-            config: getConfig(file.project),
-            files: [file.file],
-            environment: file.environment,
-            invalidates,
-          })
-        )
-      ))
-    );
-
-    const errors = results
-      .filter((r): r is PromiseRejectedResult => r.status === "rejected")
-      .map((r) => r.reason);
-    if (errors.length > 0) {
-      throw new AggregateError(
-        errors,
-        "Errors occurred while running tests. For more information, see serialized error."
-      );
-    }
+    await executeFiles({
+      name,
+      ctx,
+      project: files[0].project,
+      config: getConfig(files[0].project),
+      files: files.map((f) => f.file),
+      environment: files[0].environment,
+      invalidates,
+    });
   }
 }
 
