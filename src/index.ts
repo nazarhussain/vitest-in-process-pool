@@ -20,12 +20,11 @@ import {
   groupFilesByProject,
   loadEnvironment,
 } from "./utils.js";
-import { ModuleCacheMap } from "./moduleCacheMap.js";
 import { setupInspect } from "./inspector.js";
 
 export default function createInProcessPool(
   ctx: Vitest,
-  opts: { execArgv: string[]; env: Record<string, unknown> }
+  _opts: { execArgv: string[]; env: Record<string, unknown> }
 ): ProcessPool {
   return {
     name: "in-process-pool",
@@ -38,7 +37,7 @@ export default function createInProcessPool(
       const exit = process.exit;
 
       try {
-        await execute({ name: "run", ctx, specs, invalidates });
+        await execute({ name: "run", specs, invalidates });
       } finally {
         process.exit = exit;
       }
@@ -52,7 +51,7 @@ export default function createInProcessPool(
       const exit = process.exit;
 
       try {
-        await execute({ name: "collect", ctx, specs, invalidates });
+        await execute({ name: "collect", specs, invalidates });
       } finally {
         process.exit = exit;
       }
@@ -67,12 +66,10 @@ type WorkerRpc = WorkerGlobalState["rpc"];
 
 async function execute({
   name,
-  ctx,
   specs,
   invalidates,
 }: {
   name: "run" | "collect";
-  ctx: Vitest;
   specs: TestSpecification[];
   invalidates?: string[];
 }) {
@@ -96,11 +93,10 @@ async function execute({
       const files = filesByProjects[p];
 
       await executeFiles({
-        ctx,
         name,
         project: files[0].project,
-        environment: files[0].environment,
-        files: files.map((f) => f.file.filepath),
+        environment: envFiles[0].environment,
+        specs: files,
         invalidates,
       });
     }
@@ -108,27 +104,25 @@ async function execute({
 }
 
 async function executeFiles({
-  ctx,
   project,
-  files,
+  specs,
   name,
   environment,
   invalidates
 }: {
-  ctx: Vitest;
   name: "run" | "collect";
   project: WorkspaceProject;
-  files: string[];
+  specs: TestSpecification[];
   environment: ContextTestEnvironment;
   invalidates?: string[];
 }) {
-  project.vitest.state.clearFiles(project, files);
+  project.vitest.state.clearFiles(project, specs.map(s => s.moduleId));
   const context = {
     pool: "in-process-pool",
     worker: "single-worker",
     workerId: 10,
     config: project.serializedConfig,
-    files,
+    files: specs.map(s => s.moduleId),
     projectName: project.name,
     environment,
     providedContext: project.getProvidedContext(),
@@ -147,7 +141,8 @@ async function executeFiles({
 
     const state = {
       ctx: context,
-      moduleCache: {} as unknown as ModuleCacheMap,
+      // This cache map is replaced in `runBaseTests` anyway so we don't need it here       
+      moduleCache: {} as WorkerGlobalState['moduleCache'],
       moduleExecutionInfo: new Map(),
       config: context.config,
       onCancel,

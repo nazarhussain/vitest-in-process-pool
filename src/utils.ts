@@ -37,11 +37,12 @@ function getTransformMode(
 }
 
 export async function groupFilesByEnv(
-  files: Array<TestSpecification>,
-) {
+  specs: TestSpecification[],
+): Promise<Record<string, (TestSpecification & {environment: ContextTestEnvironment})[]>> {
   const filesWithEnv = await Promise.all(
-    files.map(async ({ moduleId: filepath, project, testLines }) => {
-      const code = await fs.readFile(filepath, 'utf-8')
+    specs.map(async (spec) => {
+      const { moduleId, project } = spec;
+      const code = await fs.readFile(moduleId, 'utf-8')
 
       // 1. Check for control comments in the file
       let env = code.match(/@(?:vitest|jest)-environment\s+([\w-]+)\b/)?.[1]
@@ -49,7 +50,7 @@ export async function groupFilesByEnv(
       if (!env) {
         for (const [glob, target] of project.config.environmentMatchGlobs
           || []) {
-          if (mm.isMatch(filepath, glob, { cwd: project.config.root })) {
+          if (mm.isMatch(moduleId, glob, { cwd: project.config.root })) {
             env = target
             break
           }
@@ -60,7 +61,7 @@ export async function groupFilesByEnv(
 
       const transformMode = getTransformMode(
         project.config.testTransformMode,
-        filepath,
+        moduleId,
       )
 
       let envOptionsJson = code.match(/@(?:vitest|jest)-environment-options\s+(.+)/)?.[1]
@@ -79,13 +80,9 @@ export async function groupFilesByEnv(
           : null,
       }
       return {
-        file: {
-          filepath,
-          testLocations: testLines,
-        },
-        project,
+        ...spec,
         environment,
-      }
+      } as TestSpecification & {environment: ContextTestEnvironment}
     }),
   )
 
@@ -93,9 +90,9 @@ export async function groupFilesByEnv(
 }
 
 export async function groupFilesByProject(
-  files: Array<{file: {filepath: string}, project: TestProject, environment: ContextTestEnvironment}>,
+  specs: TestSpecification[],
 ) {
-  return groupBy(files, ({project}) => project.name);
+  return groupBy(specs, ({project}) => project.name);
 }
 
 export function getUniqueProjects(
