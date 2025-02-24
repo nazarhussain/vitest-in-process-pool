@@ -31,6 +31,6 @@ Or from console use `--pool vitest-in-process-pool` along with `vitest`.
 
 This is a n known issue and can be resolved by disabling the summary for reporter by adding following reporter configuration.
 
-```json
+```
     reporters: [["default", {"summary": false}]]
 ```
