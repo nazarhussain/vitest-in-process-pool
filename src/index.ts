@@ -1,61 +1,81 @@
 import {
-  CancelReason,
-  ContextRPC,
-  ContextTestEnvironment,
-  SerializedConfig,
+  RuntimeRPC,
   WorkerGlobalState,
-  WorkerRPC,
+  ContextTestEnvironment,
+  ContextRPC,
+  CancelReason,
 } from "vitest";
-import { builtinEnvironments } from "vitest/environments";
-import { Environment } from "vitest/environments.js";
 import {
   createMethodsRPC,
-  TestSpecification,
-  Vitest,
   WorkspaceProject,
+  type ProcessPool,
+  type TestSpecification,
+  type Vitest,
 } from "vitest/node";
-import { createStackString, parseStacktrace } from "vitest/utils";
 import { runBaseTests } from "vitest/workers";
-import { ModuleCacheMap } from "./moduleCacheMap.js";
-import { getConfig, getUniqueProjects, groupFilesByEnv } from "./utils.js";
+import { createStackString, parseStacktrace } from "vitest/utils";
+import {
+  getUniqueProjects,
+  groupFilesByEnv,
+  groupFilesByProject,
+  loadEnvironment,
+} from "./utils.js";
 import { setupInspect } from "./inspector.js";
 
-const envsOrder = ["node", "jsdom", "happy-dom", "edge-runtime"];
-
-export default function createThreadsJsPool(
+export default function createInProcessPool(
   ctx: Vitest,
   _opts: { execArgv: string[]; env: Record<string, unknown> }
-) {
+): ProcessPool {
   return {
-    name: "in-process",
-    runTests: async (specs: TestSpecification[], invalidates: []) => {
-      return execute({ name: "run", ctx, specs, invalidates });
+    name: "in-process-pool",
+    async runTests(
+      specs: TestSpecification[],
+      invalidates?: string[]
+    ): Promise<void> {
+      // TODO: don't rely on reassigning process.exit
+      // https://github.com/vitest-dev/vitest/pull/4441#discussion_r1443771486
+      const exit = process.exit;
+
+      try {
+        await execute({ name: "run", specs, invalidates });
+      } finally {
+        process.exit = exit;
+      }
     },
-    collectTests: async (specs: TestSpecification[], invalidates: []) => {
-      return execute({ name: "collect", ctx, specs, invalidates });
+    async collectTests(
+      specs: TestSpecification[],
+      invalidates?: string[]
+    ): Promise<void> {
+      // TODO: don't rely on reassigning process.exit
+      // https://github.com/vitest-dev/vitest/pull/4441#discussion_r1443771486
+      const exit = process.exit;
+
+      try {
+        await execute({ name: "collect", specs, invalidates });
+      } finally {
+        process.exit = exit;
+      }
     },
-    close: async () => {
-      ctx.logger.console.debug("closing pool");
-    },
+    async close(): Promise<void> {},
   };
 }
 
-const projectRpcs = new WeakMap<WorkspaceProject, WorkerRPC>();
+const projectRpcs = new WeakMap<WorkspaceProject, RuntimeRPC>();
+const envsOrder = ["node", "jsdom", "happy-dom", "edge-runtime"];
+type WorkerRpc = WorkerGlobalState["rpc"];
 
 async function execute({
-  ctx,
   name,
   specs,
   invalidates,
 }: {
-  ctx: Vitest;
   name: "run" | "collect";
   specs: TestSpecification[];
-  invalidates: string[];
+  invalidates?: string[];
 }) {
   const projects = getUniqueProjects(specs);
   for (const project of projects) {
-    projectRpcs.set(project, createMethodsRPC(project) as unknown as WorkerRPC);
+    projectRpcs.set(project, createMethodsRPC(project));
   }
 
   const filesByEnv = await groupFilesByEnv(specs);
@@ -64,51 +84,52 @@ async function execute({
   );
 
   for (const env of envs) {
-    const files = filesByEnv[env];
+    const envFiles = filesByEnv[env];
+    if (!envFiles?.length) continue;
 
-    if (!files?.length) continue;
+    const filesByProjects = await groupFilesByProject(envFiles);
 
-    await executeFiles({
-      name,
-      ctx,
-      project: files[0].project,
-      config: getConfig(files[0].project),
-      files: files.map((f) => f.file),
-      environment: files[0].environment,
-      invalidates,
-    });
+    for (const p of Object.keys(filesByProjects)) {
+      const files = filesByProjects[p];
+
+      await executeFiles({
+        name,
+        project: files[0].project,
+        environment: envFiles[0].environment,
+        specs: files,
+        invalidates,
+      });
+    }
   }
 }
 
 async function executeFiles({
-  ctx,
   project,
-  files,
+  specs,
   name,
   environment,
+  invalidates
 }: {
-  ctx: Vitest;
   name: "run" | "collect";
   project: WorkspaceProject;
-  config: SerializedConfig;
-  files: string[];
+  specs: TestSpecification[];
   environment: ContextTestEnvironment;
-  invalidates: string[];
+  invalidates?: string[];
 }) {
+  project.vitest.state.clearFiles(project, specs.map(s => s.moduleId));
   const context = {
-    pool: "",
-    worker: null as any,
+    pool: "in-process-pool",
+    worker: "single-worker",
     workerId: 10,
-    config: getConfig(project),
-    files,
-    projectName: project.getName(),
+    config: project.serializedConfig,
+    files: specs.map(s => s.moduleId),
+    projectName: project.name,
     environment,
     providedContext: project.getProvidedContext(),
+    invalidates,
   } satisfies ContextRPC;
 
   const cleanupInspect = setupInspect(context);
-
-  ctx.state.clearFiles(project, files);
 
   let setCancel = (_reason: CancelReason) => {};
   const onCancel = new Promise<CancelReason>((resolve) => {
@@ -120,15 +141,17 @@ async function executeFiles({
 
     const state = {
       ctx: context,
-      moduleCache: new ModuleCacheMap(),
-      config: getConfig(project),
+      // This cache map is replaced in `runBaseTests` anyway so we don't need it here       
+      moduleCache: {} as WorkerGlobalState['moduleCache'],
+      moduleExecutionInfo: new Map(),
+      config: context.config,
       onCancel,
-      environment: await loadEnvironment(context, rpc),
+      environment: loadEnvironment(context),
       durations: {
         environment: 0,
         prepare: 0,
       },
-      rpc,
+      rpc: rpc as unknown as WorkerRpc,
       providedContext: project.getProvidedContext(),
       onFilterStackTrace(stack) {
         return createStackString(parseStacktrace(stack));
@@ -141,16 +164,4 @@ async function executeFiles({
   } finally {
     cleanupInspect();
   }
-}
-
-export async function loadEnvironment(
-  ctx: ContextRPC,
-  _rpc: WorkerRPC
-): Promise<Environment> {
-  const name = ctx.environment.name;
-  if (name in builtinEnvironments) {
-    return builtinEnvironments[name as keyof typeof builtinEnvironments];
-  }
-
-  throw new Error("Custom Environment is not yet supported");
 }

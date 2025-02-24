@@ -40,7 +40,7 @@ export function setupInspect(ctx: ContextRPC) {
           session.post("Debugger.enable");
           session.post("Debugger.setBreakpointByUrl", {
             lineNumber: 0,
-            url: pathToFileURL(firstTestFile),
+            url: pathToFileURL(typeof firstTestFile === "string" ? firstTestFile : firstTestFile.filepath),
           });
         }
       }

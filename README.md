@@ -24,3 +24,13 @@ export default defineConfig({
 ```
 
 Or from console use `--pool vitest-in-process-pool` along with `vitest`.
+
+### Known Issues
+
+**Error: Task instance was not found for suite "testing skipped"**
+
+This is a n known issue and can be resolved by disabling the summary for reporter by adding following reporter configuration.
+
+```json
+    reporters: [["default", {"summary": false}]]
+```
