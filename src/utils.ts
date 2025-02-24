@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import mm from "micromatch";
 import type {
   EnvironmentOptions,
+  TestProject,
   TestSpecification,
   TransformModePatterns,
   VitestEnvironment,
   WorkspaceProject,
 } from "vitest/node";
-import type { ContextTestEnvironment, SerializedConfig } from "vitest";
+import type { ContextRPC, ContextTestEnvironment} from "vitest";
+import { Environment, builtinEnvironments } from "vitest/environments";
 
 export function groupBy<T, K extends string | number | symbol>(
   collection: T[],
@@ -34,59 +36,66 @@ function getTransformMode(
   return undefined;
 }
 
-export async function groupFilesByEnv(files: Array<TestSpecification>) {
+export async function groupFilesByEnv(
+  files: Array<TestSpecification>,
+) {
   const filesWithEnv = await Promise.all(
-    files.map(async (spec) => {
-      const file = spec.moduleId;
-      const project = spec.project.workspaceProject;
-      const code = await fs.readFile(file, "utf-8");
+    files.map(async ({ moduleId: filepath, project, testLines }) => {
+      const code = await fs.readFile(filepath, 'utf-8')
 
       // 1. Check for control comments in the file
-      let env = code.match(/@(?:vitest|jest)-environment\s+([\w-]+)\b/)?.[1];
+      let env = code.match(/@(?:vitest|jest)-environment\s+([\w-]+)\b/)?.[1]
       // 2. Check for globals
       if (!env) {
-        for (const [glob, target] of project.config.environmentMatchGlobs ||
-          []) {
-          if (mm.isMatch(file, glob, { cwd: project.config.root })) {
-            env = target;
-            break;
+        for (const [glob, target] of project.config.environmentMatchGlobs
+          || []) {
+          if (mm.isMatch(filepath, glob, { cwd: project.config.root })) {
+            env = target
+            break
           }
         }
       }
       // 3. Fallback to global env
-      env ||= project.config.environment || "node";
+      env ||= project.config.environment || 'node'
 
       const transformMode = getTransformMode(
         project.config.testTransformMode,
-        file
-      );
+        filepath,
+      )
 
-      let envOptionsJson = code.match(
-        /@(?:vitest|jest)-environment-options\s+(.+)/
-      )?.[1];
-      if (envOptionsJson?.endsWith("*/")) {
+      let envOptionsJson = code.match(/@(?:vitest|jest)-environment-options\s+(.+)/)?.[1]
+      if (envOptionsJson?.endsWith('*/')) {
         // Trim closing Docblock characters the above regex might have captured
-        envOptionsJson = envOptionsJson.slice(0, -2);
+        envOptionsJson = envOptionsJson.slice(0, -2)
       }
 
-      const envOptions = JSON.parse(envOptionsJson || "null");
-      const envKey = env === "happy-dom" ? "happyDOM" : env;
+      const envOptions = JSON.parse(envOptionsJson || 'null')
+      const envKey = env === 'happy-dom' ? 'happyDOM' : env
       const environment: ContextTestEnvironment = {
         name: env as VitestEnvironment,
         transformMode,
         options: envOptions
           ? ({ [envKey]: envOptions } as EnvironmentOptions)
           : null,
-      };
+      }
       return {
-        file,
+        file: {
+          filepath,
+          testLocations: testLines,
+        },
         project,
         environment,
-      };
-    })
-  );
+      }
+    }),
+  )
 
-  return groupBy(filesWithEnv, ({ environment }) => environment.name);
+  return groupBy(filesWithEnv, ({ environment }) => environment.name)
+}
+
+export async function groupFilesByProject(
+  files: Array<{file: {filepath: string}, project: TestProject, environment: ContextTestEnvironment}>,
+) {
+  return groupBy(files, ({project}) => project.name);
 }
 
 export function getUniqueProjects(
@@ -94,19 +103,18 @@ export function getUniqueProjects(
 ): WorkspaceProject[] {
   const projects = new Set<WorkspaceProject>();
   for (const spec of specs) {
-    projects.add(spec.project.workspaceProject);
+    projects.add(spec.project);
   }
   return [...projects];
 }
 
-const configs = new WeakMap<WorkspaceProject, SerializedConfig>();
-export function getConfig(project: WorkspaceProject): SerializedConfig {
-  if (configs.has(project)) {
-    return configs.get(project)!;
+export function loadEnvironment(
+  ctx: ContextRPC,
+): Environment {
+  const name = ctx.environment.name;
+  if (name in builtinEnvironments) {
+    return builtinEnvironments[name as keyof typeof builtinEnvironments];
   }
 
-  const config = project.getSerializableConfig();
-  configs.set(project, config);
-
-  return config;
+  throw new Error("Custom Environment is not yet supported");
 }
