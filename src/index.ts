@@ -46,12 +46,20 @@ export default function createInProcessPool(
   const runWithFiles = (name: "run" | "collect"): RunWithFiles => {
     let id = 0;
 
+    /**
+     * %%%%%% THIS IS A PATCH TO FIX VITEST BEHAVIOR %%%%%%
+     * This pool run tests in the same process as vitest, which makes the object been updated in 
+     * the cache as automatically because task objects are referred and not copied.
+     * This makes the vitest reporter to not report the correct task id.
+     * -----------------------------------------------------
+     */
     if (name === "run") {
       ctx.state.updateId = (task: RunnerTask, project: TestProject) => {
         ctx.state.idMap.delete(task.id);
         originalUpdateId.call(ctx.state, task, project);
       };
     }
+    // -----------------------------------------------------
 
     async function runFiles(
       project: TestProject,
@@ -61,8 +69,6 @@ export default function createInProcessPool(
       invalidates: string[] = []
     ) {
       const prepareStart = Date.now();
-      const paths = files.map((f) => f.filepath);
-      // ctx.state.clearFiles(project, paths);
 
       const workerId = ++id;
       const rpcContext = {
