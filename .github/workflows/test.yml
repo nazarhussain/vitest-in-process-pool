@@ -36,9 +36,6 @@ jobs:
       - name: Run unit tests with NodeJS
         run: pnpm test:unit
 
-      - name: Run unit tests with Bun
-        run: bun run --bun test:unit
-
   test_bun:
     runs-on: ubuntu-latest
 
