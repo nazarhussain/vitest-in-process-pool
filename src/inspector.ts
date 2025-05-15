@@ -3,7 +3,7 @@
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { ContextRPC, SerializedConfig } from "vitest";
+import type { ContextRPC, SerializedConfig } from "vitest";
 
 const __require = createRequire(import.meta.url);
 let inspector: typeof import("node:inspector");
