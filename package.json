@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "micromatch": "^4.0.8",
-    "vitest": "^3.0.6"
+    "vitest": "^3.1.3"
   },
   "devDependencies": {
     "@types/micromatch": "^4.0.9",
@@ -23,6 +23,6 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "vitest": ">=3.0.0 <3.1.0"
+    "vitest": ">=3.1.0 <4.0.0"
   }
 }
