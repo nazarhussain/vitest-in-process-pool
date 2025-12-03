@@ -1,3 +1,7 @@
+> [!CAUTION]
+> Since [`vitest@4.0.6`](https://github.com/oven-sh/bun/issues/4145#issuecomment-3486457531) the Vitest it is works with Bun runtime. So need for this package is no more needed. So moving this repo to archive mode.
+
+
 # vitest-in-process-pool
 
 ---
