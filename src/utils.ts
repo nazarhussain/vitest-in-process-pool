@@ -8,19 +8,19 @@ import type {
   VitestEnvironment,
   WorkspaceProject,
 } from "vitest/node";
-import type { ContextRPC, ContextTestEnvironment} from "vitest";
-import { Environment, builtinEnvironments } from "vitest/environments";
+import type { ContextRPC, ContextTestEnvironment, SerializedConfig} from "vitest";
+import { type Environment, builtinEnvironments } from "vitest/environments";
 
 export function groupBy<T, K extends string | number | symbol>(
   collection: T[],
-  iteratee: (item: T) => K
-) {
+  iteratee: (item: T) => K,
+): Record<K, T[]> {
   return collection.reduce((acc, item) => {
-    const key = iteratee(item);
-    acc[key] ||= [];
-    acc[key].push(item);
-    return acc;
-  }, {} as Record<K, T[]>);
+    const key = iteratee(item)
+    acc[key] ||= []
+    acc[key].push(item)
+    return acc
+  }, {} as Record<K, T[]>)
 }
 
 function getTransformMode(
@@ -37,12 +37,15 @@ function getTransformMode(
 }
 
 export async function groupFilesByEnv(
-  specs: TestSpecification[],
-): Promise<Record<string, (TestSpecification & {environment: ContextTestEnvironment})[]>> {
+  files: Array<TestSpecification>,
+): Promise<Record<string, {
+    file: { filepath: string; testLocations: number[] | undefined }
+    project: TestProject
+    environment: ContextTestEnvironment
+  }[]>> {
   const filesWithEnv = await Promise.all(
-    specs.map(async (spec) => {
-      const { moduleId, project } = spec;
-      const code = await fs.readFile(moduleId, 'utf-8')
+    files.map(async ({ moduleId: filepath, project, testLines }) => {
+      const code = await fs.readFile(filepath, 'utf-8')
 
       // 1. Check for control comments in the file
       let env = code.match(/@(?:vitest|jest)-environment\s+([\w-]+)\b/)?.[1]
@@ -50,7 +53,7 @@ export async function groupFilesByEnv(
       if (!env) {
         for (const [glob, target] of project.config.environmentMatchGlobs
           || []) {
-          if (mm.isMatch(moduleId, glob, { cwd: project.config.root })) {
+          if (mm.isMatch(filepath, glob, { cwd: project.config.root })) {
             env = target
             break
           }
@@ -61,7 +64,7 @@ export async function groupFilesByEnv(
 
       const transformMode = getTransformMode(
         project.config.testTransformMode,
-        moduleId,
+        filepath,
       )
 
       let envOptionsJson = code.match(/@(?:vitest|jest)-environment-options\s+(.+)/)?.[1]
@@ -80,29 +83,17 @@ export async function groupFilesByEnv(
           : null,
       }
       return {
-        ...spec,
+        file: {
+          filepath,
+          testLocations: testLines,
+        },
+        project,
         environment,
-      } as TestSpecification & {environment: ContextTestEnvironment}
+      }
     }),
   )
 
   return groupBy(filesWithEnv, ({ environment }) => environment.name)
-}
-
-export async function groupFilesByProject(
-  specs: TestSpecification[],
-) {
-  return groupBy(specs, ({project}) => project.name);
-}
-
-export function getUniqueProjects(
-  specs: TestSpecification[]
-): WorkspaceProject[] {
-  const projects = new Set<WorkspaceProject>();
-  for (const spec of specs) {
-    projects.add(spec.project);
-  }
-  return [...projects];
 }
 
 export function loadEnvironment(
@@ -115,3 +106,53 @@ export function loadEnvironment(
 
   throw new Error("Custom Environment is not yet supported");
 }
+
+const REGEXP_WRAP_PREFIX = '$$vitest:'
+
+/**
+ * Prepares `SerializedConfig` for serialization, e.g. `node:v8.serialize`
+ */
+export function wrapSerializableConfig(config: SerializedConfig) {
+  let testNamePattern = config.testNamePattern
+  let defines = config.defines
+
+  // v8 serialize does not support regex
+  if (testNamePattern && typeof testNamePattern !== 'string') {
+    testNamePattern
+      = `${REGEXP_WRAP_PREFIX}${testNamePattern.toString()}` as unknown as RegExp
+  }
+
+  // v8 serialize drops properties with undefined value
+  if (defines) {
+    defines = { keys: Object.keys(defines), original: defines }
+  }
+
+  return {
+    ...config,
+    testNamePattern,
+    defines,
+  } as SerializedConfig
+}
+
+export function getUniqueProjects(
+  specs: TestSpecification[]
+): WorkspaceProject[] {
+  const projects = new Set<WorkspaceProject>();
+  for (const spec of specs) {
+    projects.add(spec.project);
+  }
+  return [...projects];
+}
+
+const configs = new WeakMap<TestProject, SerializedConfig>()
+  export function getConfig (project: TestProject): SerializedConfig  {
+    if (configs.has(project)) {
+      return configs.get(project)!
+    }
+
+    const _config = project.serializedConfig;
+    const config = wrapSerializableConfig(_config)
+
+    configs.set(project, config)
+    return config
+  }
